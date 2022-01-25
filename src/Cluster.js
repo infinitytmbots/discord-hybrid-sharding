@@ -213,10 +213,14 @@ class Cluster extends EventEmitter {
   */
   kill(options = {}) {
     if (this.process) {
-      this.process.removeListener('exit', this._exitListener);
+      try{ 
+        this.process.removeListener('exit', this._exitListener);
+      }catch(error){}
       this.process.kill();
     } else {
-      this.worker.removeListener('exit', this._exitListener);
+      try{
+        this.worker.removeListener('exit', this._exitListener);
+      }catch(error){}
       this.worker.terminate();
     }
     if (options.force) this._cleanupHearbeat()
@@ -327,8 +331,7 @@ class Cluster extends EventEmitter {
   * @param {string|Function} script JavaScript to run on the cluster
   * @returns {Promise<*>} Result of the script execution
   */
-  eval(script, context) {
-
+  eval(script, context, timeout) {
     // Stringify the script if it's a Function
     const _eval = typeof script === 'function' ? `(${script})(this, ${JSON.stringify(context)})` : script;
 
@@ -341,8 +344,12 @@ class Cluster extends EventEmitter {
     const promise = new Promise((resolve, reject) => {
       const child = this.process || this.worker;
 
+      //Set A timeout for the eval
+      let temptimeout;
+      
       const listener = message => {
         if (!message || message._eval !== _eval) return;
+        if(temptimeout) clearTimeout(temptimeout);
         child.removeListener('message', listener);
         this._evals.delete(_eval);
         if (!message._error) resolve(message._result);
@@ -350,7 +357,17 @@ class Cluster extends EventEmitter {
       };
       child.on('message', listener);
 
-      this.send({ _eval }).catch(err => {
+      this.send({ _eval }).then(m => {
+        if(timeout){
+          temptimeout = setTimeout(()=> {
+            if(!this._evals.has(_eval)) return;
+            child.removeListener('message', listener);
+            this._evals.delete(_eval);
+            reject(new Error(`BROADCAST_EVAL_REQUEST_TIMED_OUT`));
+          }, timeout)
+        }
+      }).catch(err => {
+        if(temptimeout) clearTimeout(temptimeout);
         child.removeListener('message', listener);
         this._evals.delete(_eval);
         reject(err);
@@ -425,7 +442,7 @@ class Cluster extends EventEmitter {
       // Cluster is requesting an eval broadcast
       if (message._sEval) {
         const resp = { _sEval: message._sEval, _sEvalShard: message._sEvalShard };
-        this.manager._performOnShards('eval', [message._sEval], message._sEvalShard).then(
+        this.manager._performOnShards('eval', [message._sEval], message._sEvalShard, message._sEvalTimeout).then(
           results => this.send({ ...resp, _result: results }),
           err => this.send({ ...resp, _error: Util.makePlainError(err) }),
         );
@@ -435,8 +452,8 @@ class Cluster extends EventEmitter {
       //Evals a Request on a Cluster
       if (message.hasOwnProperty('_sManagerEval')) {
         this.manager.evalOnManager(message._sManagerEval).then((result) => {
-          if (result._results) return this.send({ _results: result._results, _sManagerEval: message._sManagerEval });
-          if (result._error) return this.send({ _error: Util.makePlainError(result._error), _sManagerEval: message._sManagerEval })
+          if (result._results) return this.send({ _sManagerEvalResponse: result._results, ...message });
+          if (result._error) return this.send({ _error: Util.makePlainError(result._error), ...message })
         });
         return;
       }
@@ -493,8 +510,10 @@ class Cluster extends EventEmitter {
     }
 
     let emitmessage;
-    if (typeof message === 'object') emitmessage = new IPCMessage(this, message)
-    else emitmessage = message;
+    if (typeof message === 'object'){
+       emitmessage = new IPCMessage(this, message);
+       if(emitmessage._sRequest) this.manager.emit('clientRequest', emitmessage)
+    }else emitmessage = message;
     /**
     * Emitted upon receiving a message from the child process/worker.
     * @event Shard#message
