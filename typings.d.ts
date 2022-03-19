@@ -70,18 +70,18 @@ declare module 'discord-hybrid-sharding' {
     public evalOnManager<T>(fn: (manager: Manager) => T, options: { timeout?: number }): Promise<any[]>;
 
     public evalOnCluster(script: string, options: { cluster?: number; shard?: number;  guildId?: string;  timeout?: number }): Promise<any[]>;
-    public evalOnCluster<T>(fn: (client: client) => T, options: { cluster?: number; shard?: number;  guildId?: string;  timeout?: number }): Promise<T>;
-    public evalOnCluster<T>(fn: (client: client) => T, options: { cluster?: number; shard?: number;  guildId?: string;  timeout?: number }): Promise<any[]>;
+    public evalOnCluster<T>(fn: (client: DJsClient) => T, options: { cluster?: number; shard?: number;  guildId?: string;  timeout?: number }): Promise<T>;
+    public evalOnCluster<T>(fn: (client: DJsClient) => T, options: { cluster?: number; shard?: number;  guildId?: string;  timeout?: number }): Promise<any[]>;
     public broadcastEval(script: string): Promise<any[]>;
     public broadcastEval(script: string, options: { cluster?: number; timeout?: number }): Promise<any>;
-    public broadcastEval<T>(fn: (client: Client) => Awaitable<T>): Promise<Serialized<T>[]>;
-    public broadcastEval<T>(fn: (client: Client) => Awaitable<T>, options: { cluster?: number; timeout?: number }): Promise<Serialized<T>>;
+    public broadcastEval<T>(fn: (client: DJsClient) => Awaitable<T>): Promise<Serialized<T>[]>;
+    public broadcastEval<T>(fn: (client: DJsClient) => Awaitable<T>, options: { cluster?: number; timeout?: number }): Promise<Serialized<T>>;
     public broadcastEval<T, P>(
-      fn: (client: Client, context: Serialized<P>) => Awaitable<T>,
+      fn: (client: DJsClient, context: Serialized<P>) => Awaitable<T>,
       options: { context: P },
     ): Promise<Serialized<T>[]>;
     public broadcastEval<T, P>(
-      fn: (client: Client, context: Serialized<P>) => Awaitable<T>,
+      fn: (client: DJsClient, context: Serialized<P>) => Awaitable<T>,
       options: { context: P; cluster?: number; timeout?: number },
     ): Promise<Serialized<T>>;
     public fetchClientValues(prop: string): Promise<any[]>;
@@ -94,7 +94,8 @@ declare module 'discord-hybrid-sharding' {
     private _checkIfClusterAlive(): Promise<any[]>;
     private _cleanupHearbeat(): Promise<any[]>;
 
-    public static singleton(client: client, mode: ClusterManagerMode): client;
+    public triggerReady(): Promise<void>;
+    public spawnNextCluster(): Promise<void>;
   }
 
   export class Manager extends EventEmitter {
@@ -104,13 +105,16 @@ declare module 'discord-hybrid-sharding' {
         totalShards?: number | 'auto';
         totalClusters?: number | 'auto';
         shardsPerClusters?: number;
-        shardList?: number[] | 'auto';
+        shardList?: number[][] | 'auto';
         mode?: ClusterManagerMode;
         respawn?: boolean;
         shardArgs?: string[];
         token?: string;
         execArgv?: string[];
         keepAlive?: keepAliveOptions;
+        queue?: {
+          auto?: boolean;
+        }
       },
     );
     private _performOnShards(method: string, args: any[]): Promise<any[]>;
@@ -126,20 +130,21 @@ declare module 'discord-hybrid-sharding' {
     public totalClusters: number | 'auto';
     public shardsPerClusters: number | 'auto';
     public totalShards: number | 'auto';
-    public shardList: number[] | 'auto';
+    public shardList: number[][] | 'auto';
     public clusterList: number[]
     public keepAlive: keepAliveOptions;
+    public queue: Queue;
     public broadcast(message: any): Promise<Cluster[]>;
     public broadcastEval(script: string): Promise<any[]>;
     public broadcastEval(script: string, options: { cluster?: number; timeout?: number }): Promise<any>;
-    public broadcastEval<T>(fn: (client: Client) => Awaitable<T>): Promise<Serialized<T>[]>;
-    public broadcastEval<T>(fn: (client: Client) => Awaitable<T>, options: { cluster?: number; timeout?: number }): Promise<Serialized<T>>;
+    public broadcastEval<T>(fn: (client: DJsClient) => Awaitable<T>): Promise<Serialized<T>[]>;
+    public broadcastEval<T>(fn: (client: DJsClient) => Awaitable<T>, options: { cluster?: number; timeout?: number }): Promise<Serialized<T>>;
     public broadcastEval<T, P>(
-      fn: (client: Client, context: Serialized<P>) => Awaitable<T>,
+      fn: (client: DJsClient, context: Serialized<P>) => Awaitable<T>,
       options: { context: P },
     ): Promise<Serialized<T>[]>;
     public broadcastEval<T, P>(
-      fn: (client: Client, context: Serialized<P>) => Awaitable<T>,
+      fn: (client: DJsClient, context: Serialized<P>) => Awaitable<T>,
       options: { context: P; cluster?: number; timeout?: number },
     ): Promise<Serialized<T>>;
     public createCluster(id: number, clusterstospawn: number[], totalshards: number): Cluster;
@@ -188,6 +193,8 @@ declare module 'discord-hybrid-sharding' {
   export type processData = {
     SHARD_LIST: number[];
     TOTAL_SHARDS: number;
+    LAST_SHARD_ID: number;
+    FIRST_SHARD_ID: number;
     CLUSTER_COUNT: number;
     CLUSTER: number;
     CLUSTER_MANAGER_MODE: ClusterManagerMode;
@@ -210,6 +217,19 @@ declare module 'discord-hybrid-sharding' {
     clusterDelay?: number;
     respawnDelay?: number;
     timeout?: number;
+  }
+
+  export interface Queue {
+    options: {
+      auto?: boolean;
+      timeout?: number;
+    }
+    queue: object[];
+    public start(): Promise<void>;
+    public stop():  Queue;
+    public resume():  Queue;
+    public add(item: any):  Queue;
+    public next():  Promise<void>;
   }
 
   export type Awaitable<T> = T | PromiseLike<T>;

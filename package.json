@@ -1,7 +1,7 @@
 {
   "name": "discord-hybrid-sharding",
-  "version": "1.4.3",
-  "description": "The first package which combines Sharding Manager & Internal Sharding to save a lot of ressources",
+  "version": "1.5.0",
+  "description": "The first package which combines sharding manager & internal sharding to save a lot of resources, which allows clustering!",
   "main": "index.js",
   "types": "./typings.d.ts",
   "dependencies": {
@@ -19,14 +19,16 @@
   },
   "keywords": [
     "discord",
-    "discord.js",
-    "bot",
-    "bots",
     "discord-sharding",
     "discord-clustering",
-    "cluster",
     "hybrid-sharding",
     "discord.js-hybrid-sharding",
+    "discord.js",
+    "eris",
+    "discordeno.js",
+    "bot",
+    "bots",
+    "cluster",
     "framework"
   ],
   "author": "meister03",

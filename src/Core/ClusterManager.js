@@ -4,7 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const Util = require('./Util.js');
+const Util = require('../Util/Util.js');
+
+const Queue = require('../Structures/Queue.js');
+
 const Cluster = require('./Cluster.js')
 
 class ClusterManager extends EventEmitter {
@@ -38,6 +41,9 @@ class ClusterManager extends EventEmitter {
         mode: 'process',
         keepAlive: {},
         token: process.env.DISCORD_TOKEN,
+        queue: {
+          auto: true,
+        }
       },
       options,
     );
@@ -185,6 +191,9 @@ class ClusterManager extends EventEmitter {
     process.env.KEEP_ALIVE_INTERVAL = this.keepAlive.interval;
     process.env.DISCORD_TOKEN = this.token;
 
+    if(options.queue.auto) process.env.CLUSTER_QUEUE_MODE = 'auto';
+    else process.env.CLUSTER_QUEUE_MODE = 'manual';
+
 
     /**
     * Ongoing promises for calls to {@link ClusterClient#evalOnCluster}, mapped by the `script` they were called with
@@ -199,6 +208,8 @@ class ClusterManager extends EventEmitter {
     */
     this.clusterList = options.clusterList || [];
 
+    this.queue = new Queue(options.queue);
+
     this._debug(`[START] Cluster Manager has been initalized`)
   }
   /**
@@ -211,10 +222,17 @@ class ClusterManager extends EventEmitter {
    * @returns {Promise<Collection<number, Cluster>>}
    */
   async spawn({ amount = this.totalShards, delay = 7000, timeout = -1 } = {}) {
+
+    if(delay < 7000) {
+      process.emitWarning(`Spawn Delay (delay: ${delay}) is smaller than 7s, this can cause global ratelimits on /gateway/bot`, {
+        code: 'CLUSTER_MANAGER',
+      });
+    }
+
     if (amount === 'auto') {
       amount = await Util.fetchRecommendedShards(this.token, 1000);
       this.totalShards = amount;
-      this._debug(`Discord recommanded Total Shard Count of ${amount}`)
+      this._debug(`Discord recommended a total shard count of ${amount}`)
     } else {
       if (typeof amount !== 'number' || isNaN(amount)) {
         throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of internal shards', 'a number.');
@@ -260,14 +278,19 @@ class ClusterManager extends EventEmitter {
     ShardCount: ${amount}
     ShardList: ${this.shardClusterList.join(', ')}`)
     for (let i = 0; i < this.totalClusters; i++) {
-      const promises = [];
       const clusterId = this.clusterList[i] || i;
-      const cluster = this.createCluster(clusterId, this.shardClusterList[i], this.totalShards)
-      promises.push(cluster.spawn(timeout));
-      if (delay > 0 && this.clusters.size !== this.totalClusters) promises.push(Util.delayFor(delay * this.shardClusterList[i].length));
-      await Promise.all(promises); // eslint-disable-line no-await-in-loop
+      const readyTimeout = timeout !== -1 ? timeout + (delay * this.shardClusterList[i].length) : timeout;
+      const spawnDelay = delay * this.shardClusterList[i].length;
+      this.queue.add({
+        run: (...a) => {
+          const cluster = this.createCluster(clusterId, this.shardClusterList[i], this.totalShards);
+          return cluster.spawn(...a);
+        }, 
+        args: [readyTimeout],
+        timeout: spawnDelay
+      });
     }
-    return this.clusters;
+    return this.queue.start();
   }
 
   /**
@@ -405,7 +428,7 @@ class ClusterManager extends EventEmitter {
     }
     const cluster = this.clusters.get(options.cluster);
     if (!cluster) return Promise.reject(new Error('CLUSTER_DOES_NOT_EXIST', options.cluster));
-    if (!cluster.process && !cluster.worker) return Promise.reject(new Error('CLUSTERING_NO_CHILD_EXISTS', cluster.id));
+    if (!cluster.thread) return Promise.reject(new Error('CLUSTERING_NO_CHILD_EXISTS', cluster.id));
     return new Promise((resolve, reject) => {
       const nonce = options.nonce;
       this._nonce.set(nonce, { resolve, reject, requestcluster: options.requestcluster });
