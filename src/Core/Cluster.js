@@ -84,23 +84,22 @@ class Cluster extends EventEmitter {
          */
         this.thread = null;
 
-
         this.restarts = {
             current: this.manager.restarts.current,
             max: this.manager.restarts.max,
             interval: this.manager.restarts.interval,
-            resetRestarts: () =>{
-               this.restarts.reset = setInterval(() => {
+            resetRestarts: () => {
+                this.restarts.reset = setInterval(() => {
                     this.restarts.current = 0;
-                }, this.manager.restarts.interval)
+                }, this.manager.restarts.interval);
             },
             cleanup: () => {
                 clearInterval(this.restarts.reset);
             },
             append: () => {
                 this.restarts.current++;
-            }
-        }
+            },
+        };
     }
     /**
      * Forks a child process or creates a worker thread for the cluster.
@@ -157,7 +156,7 @@ class Cluster extends EventEmitter {
 
             const onTimeout = () => {
                 cleanup();
-                reject(new Error('CLUSTERING_READY_TIMEOUT | ClusterId: '+ this.id));
+                reject(new Error('CLUSTERING_READY_TIMEOUT | ClusterId: ' + this.id));
             };
 
             const spawnTimeoutTimer = setTimeout(onTimeout, spawnTimeout);
@@ -175,14 +174,14 @@ class Cluster extends EventEmitter {
         this.thread.kill(options);
         this.manager.heartbeat?.clusters.get(this.id)?.stop();
         this.restarts.cleanup();
-        this._handleExit(false);
+        this._handleExit(false, options);
     }
     /**
      * Kills and restarts the cluster's process/worker.
      * @param {ClusterRespawnOptions} [options] Options for respawning the cluster
      * @returns {Promise<Child>}
      */
-    async respawn({ delay = 500, timeout = 30000 } = {}) {
+    async respawn({ delay = 500, timeout = 30000 } = this.manager.spawnOptions) {
         if (this.thread) this.kill({ force: true });
         if (delay > 0) await Util.delayFor(delay);
         this.manager.heartbeat?.clusters.get(this.id)?.stop();
@@ -227,16 +226,16 @@ class Cluster extends EventEmitter {
         const _eval = typeof script === 'function' ? `(${script})(this, ${JSON.stringify(context)})` : script;
 
         // cluster is dead (maybe respawning), don't cache anything and error immediately
-        if (!this.thread) return Promise.reject(new Error('CLUSTERING_NO_CHILD_EXISTS | ClusterId: '+  this.id));
+        if (!this.thread) return Promise.reject(new Error('CLUSTERING_NO_CHILD_EXISTS | ClusterId: ' + this.id));
         const nonce = Util.generateNonce();
-        const message = {nonce, _eval, options: {timeout}, _type: messageType.CLIENT_EVAL_REQUEST};
+        const message = { nonce, _eval, options: { timeout }, _type: messageType.CLIENT_EVAL_REQUEST };
         await this.send(message);
         return await this.manager.promise.create(message);
     }
 
     /**
-    * @param {string} reason If maintenance should be enabled with a given reason or disabled when nonce provided
-    */
+     * @param {string} reason If maintenance should be enabled with a given reason or disabled when nonce provided
+     */
     triggerMaintenance(reason) {
         const _type = reason ? messageType.CLIENT_MAINTENANCE_ENABLE : messageType.CLIENT_MAINTENANCE_DISABLE;
         return this.send({ _type, maintenance: reason });
@@ -250,7 +249,7 @@ class Cluster extends EventEmitter {
     _handleMessage(message) {
         if (!message) return;
         const emit = this.messageHandler.handleMessage(message);
-        if(!emit) return;
+        if (!emit) return;
 
         let emitMessage;
         if (typeof message === 'object') {
@@ -270,19 +269,33 @@ class Cluster extends EventEmitter {
      * @param {boolean} [respawn=this.manager.respawn] Whether to spawn the cluster again
      * @private
      */
-    _handleExit(respawn = this.manager.respawn) {
+    _handleExit(respawn = this.manager.respawn, options = {}) {
         /**
          * Emitted upon the cluster's child process/worker exiting.
          * @event Cluster#death
          * @param {Child|Worker} process Child process/worker that exited
          */
-        this.emit('death', this.thread.process);
-        this.manager._debug('[DEATH] Cluster died, attempting respawn | Restarts Left: '+ (this.restarts.max - this.restarts.current), this.id);
+        if (options?.reason !== 'reclustering') this.emit('death', this.thread.process);
+        if (respawn) {
+            this.manager._debug(
+                '[DEATH] Cluster died, attempting respawn | Restarts Left: ' +
+                    (this.restarts.max - this.restarts.current),
+                this.id,
+            );
+        } else {
+            this.manager._debug('[KILL] Cluster killed with reason: ' + (options?.reason || 'not given'), this.id);
+        }
 
         this.ready = false;
         this.thread = null;
 
-        if(this.restarts.current >= this.restarts.max) this.manager._debug('[ATTEMPTED_RESPAWN] Attempted Respawn Declined | Max Restarts have been exceeded', this.id);
+        if (!respawn) return;
+
+        if (this.restarts.current >= this.restarts.max)
+            this.manager._debug(
+                '[ATTEMPTED_RESPAWN] Attempted Respawn Declined | Max Restarts have been exceeded',
+                this.id,
+            );
         if (respawn && this.restarts.current < this.restarts.max) this.spawn().catch(err => this.emit('error', err));
 
         this.restarts.append();
